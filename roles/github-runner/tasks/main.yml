@@ -1,0 +1,165 @@
+- name: Runner container
+  community.docker.docker_container:
+    name: {{ item }}
+    image: 739561048503.dkr.ecr.us-east-1.amazonaws.com/runner
+    state: started
+    recreates: true
+    pull: always
+    restart_policy: always
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
+    env:
+      NAME: {{ item }}
+      TOKEN: "{{ lookup('community.hashi_vault.hashi_vault', 'secret=roboshop-infra/data/github-runner:RUNNER_TOKEN token={{ vault_token }} url={{ vault_url }}') }}"
+      ORG: "https://github.com/baludevopsb85"
+    loop:
+      - runner1
+      - runner2
+      - runner3
+    register: out
+    ignore_errors: yes
+
+- name: Run from Scratch
+  when: out.failed is defined
+  block:
+    - name: Set Prompt
+      ansible.builtin.shell: set-prompt github-runner
+
+    - name: Load common lvm
+      ansible.builtin.import_roles:
+        name: common
+        tasks_from: lvm
+
+    - name: Download Docker repo
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/rhel/docker-ce.repo
+        dest: /etc/yum.repos.d/docker.repo
+
+    - name: Install Docker
+      ansible.builtin.dnf:
+        name: docker-ce
+        state: installed
+
+    - name: Copy Docker Service File
+      ansible.builtin.template:
+        name: docker.service
+        dest: /etc/systemd/system/multi-user.target.units/docker.service
+
+    - name: Start Docker
+      ansible.builtin.systemd_service:
+        name: docker
+        state: restarted
+        enabled: yes
+        daemon-reload: yes
+
+    - name: Add github runner user
+      ansible.builtin.user:
+        name: github-runner
+        home: /github-runner
+        groups: docker
+
+    - name: Login to ECR
+      ansible.builtin.shell: |
+        /usr/local/bin/aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 739561048503.dkr.ecr.us-east-1.amazonaws.com
+
+    - name: Runner container
+      community.docker.docker_container:
+        name: {{ item }}
+        image: 739561048503.dkr.ecr.us-east-1.amazonaws.com/runner
+        state: started
+        recreates: true
+        pull: always
+        restart_policy: always
+        volumes:
+          - /var/run/docker.sock:/var/run/docker.sock
+        env:
+          NAME: {{ item }}
+          TOKEN: "{{ lookup('community.hashi_vault.hashi_vault', 'secret=roboshop-infra/data/github-runner:RUNNER_TOKEN token={{ vault_token }} url={{ vault_url }}') }}"
+          ORG: "https://github.com/baludevopsb85"
+        loop:
+         - runner1
+         - runner2
+         - runner3
+
+
+## Below we moved inside a container.
+
+#- name: Download runner software
+#  ansible.builtin.unarchive:
+#    src: https://github.com/actions/runner/releases/download/v{{ runner_version }}/actions-runner-linux-x64-{{ runner_version }}.tar.gz
+#    dest: /github-runner
+#    owner: github-runner
+#    group: github-runner
+#    remote_src: yes
+#
+#- name: Install libicu
+#  ansible.builtin.dnf:
+#    name: libicu
+#    state: installed
+#
+#- name: Configure runner
+#  ansible.builtin.shell: ./config.sh --url https://github.com/{{ github_org_name }} --token {{ token }} --runnergroup Default --name github-runner --labels self-hosted --work _work --replace
+#  args:
+#    chdir: /github-runner
+#  become_user: github-runner
+#  vars:
+#    token: "{{ lookup('community.hashi_vault.hashi_vault', 'secret=roboshop-infra/data/github-runner:RUNNER_TOKEN token={{ vault_token }} url={{ vault_url }}') }}"
+#  ignore_errors: yes
+#
+#- name: Copy Service
+#  ansible.builtin.template:
+#    src: github-runner.service
+#    dest: /etc/systemd/system/github-runner.service
+#
+#- name: Start Runner Service
+#  ansible.builtin.systemd_service:
+#    name: github-runner
+#    state: restarted
+#    enabled: yes
+#
+#- name: Download Terraform Repo
+#  ansible.builtin.get_url:
+#    url: https://rpm.releases.hashicorp.com/RHEL/hashicorp.repo
+#    dest: /etc/yum.repos.d/hashicorp.repo
+#
+#- name: Install Terraform
+#  ansible.builtin.dnf:
+#    name: terraform
+#    state: installed
+#
+#- name: Download Docker repo
+#  ansible.builtin.get_url:
+#    url: https://download.docker.com/linux/rhel/docker-ce.repo
+#    dest: /etc/yum.repos.d/docker.repo
+#
+#- name: Install Docker
+#  ansible.builtin.dnf:
+#    name: docker-ce
+#    state: installed
+#
+#- name: Start Docker
+#  ansible.builtin.systemd_service:
+#    name: docker
+#    state: started
+#    enabled: yes
+#
+#- name: Add docker group to user
+#  ansible.builtin.user:
+#    name: github-runner
+#    groups: docker
+#
+#- name: Install NodeJS
+#  ansible.builtin.shell: |
+#    dnf module disable nodejs -y
+#    dnf module enable nodejs:22 -y
+#
+#- name: Install App Packages
+#  ansible.builtin.dnf:
+#    name:
+#      - nodejs
+#      - maven
+#      - npm
+#
+#- name: Install Helm
+#  ansible.builtin.shell: curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
